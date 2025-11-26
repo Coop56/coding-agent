@@ -1,6 +1,22 @@
 import os
 import subprocess
 
+from google.genai import types
+
+schema_run_python_file = types.FunctionDeclaration(
+    name="run_python_file",
+    description="Executes a Python file with optional arguments, constrained to the working directory.",
+    parameters=types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            "file_path": types.Schema(
+                type=types.Type.STRING,
+                description="The path to the Python file to execute, relative to the working directory.",
+            ),
+        }
+    )
+)
+
 def run_python_file(working_directory, file_path, args=[]):
     full_path = os.path.join(working_directory, file_path)
 
@@ -15,7 +31,7 @@ def run_python_file(working_directory, file_path, args=[]):
 
     try:
         completed_process = subprocess.run(
-            ["python", file_path] + args,
+            ["python3", file_path] + args,
             capture_output=True,
             text=True,
             timeout=30,
@@ -27,7 +43,7 @@ def run_python_file(working_directory, file_path, args=[]):
         if completed_process.returncode != 0:
             return f"Process exited with code {completed_process.returncode}.\n{output_string}"
 
-        if completed_process.stdout == '':
+        if completed_process.stdout.strip() == '' and completed_process.stderr.strip() == '':
             return f"No output produced."
 
         return output_string
