@@ -47,14 +47,16 @@ def main():
     ]
 
     system_prompt = """
-    You are a helpful AI coding agent.
+    You are a helpful AI coding agent that can iteratively use tools to accomplish tasks.
 
-    When a user asks a question or makes a request, make a function call plan. You can perform the following operations:
+    When a user asks a question or makes a request, break it down into steps and use the available functions to gather information, analyze code, make changes, and test results. You can perform the following operations:
 
     - List files and directories
     - Read file contents
     - Execute Python files with optional arguments
     - Write or overwrite files
+
+    Work step by step, using the results from one function call to inform your next action. Continue using tools until you have completely answered the user's question or accomplished their request. Only provide a final response when you have gathered enough information or completed the task.
 
     All paths you provide should be relative to the working directory. You do not need to specify the working directory in your function calls as it is automatically injected for security reasons.
     """
@@ -67,41 +69,66 @@ def main():
             schema_write_file
         ]
     )
+    max_iterations = 20
+    iteration = 0
 
-    response = client.models.generate_content(
-        model="gemini-2.0-flash-001",
-        contents=messages,
-        config=types.GenerateContentConfig(
-            tools=[available_functions], system_instruction=system_prompt))
+    try:
+        while iteration < max_iterations:
+            iteration += 1
 
+            response = client.models.generate_content(
+                model="gemini-2.0-flash-001",
+                contents=messages,
+                config=types.GenerateContentConfig(
+                    tools=[available_functions], system_instruction=system_prompt))
 
-    # Print text if it exists
-    if response.text:
-        print(response.text)
+            for candidate in response.candidates:
+                messages.append(candidate.content)
 
-    # Handle function calls in the response
-    function_call_results = []
+            function_call_results = []
+            has_function_calls = False
 
-    # Check for function calls in the response
-    if hasattr(response, 'function_calls') and response.function_calls is not None:
-        for function_call in response.function_calls:
-            function_call_result = call_function(function_call, verbose=args.verbose)
-            if not hasattr(function_call_result.parts[0], 'function_response'):
-                raise Exception("Function call did not return expected function_response")
-            function_call_results.append(function_call_result.parts[0])
-            if args.verbose:
-                print(f"-> {function_call_result.parts[0].function_response.response}")
-    else:
-        # Check in candidates parts for function calls
-        for candidate in response.candidates:
-            for part in candidate.content.parts:
-                if hasattr(part, 'function_call') and part.function_call is not None:
-                    function_call_result = call_function(part.function_call, verbose=args.verbose)
+            # Check for function calls in the response
+            if hasattr(response, 'function_calls') and response.function_calls is not None:
+                has_function_calls = True
+                for function_call in response.function_calls:
+                    function_call_result = call_function(function_call, verbose=args.verbose)
                     if not hasattr(function_call_result.parts[0], 'function_response'):
                         raise Exception("Function call did not return expected function_response")
                     function_call_results.append(function_call_result.parts[0])
                     if args.verbose:
                         print(f"-> {function_call_result.parts[0].function_response.response}")
+            else:
+                # Check in candidates parts for function calls
+                for candidate in response.candidates:
+                    for part in candidate.content.parts:
+                        if hasattr(part, 'function_call') and part.function_call is not None:
+                            has_function_calls = True
+                            function_call_result = call_function(part.function_call, verbose=args.verbose)
+                            if not hasattr(function_call_result.parts[0], 'function_response'):
+                                raise Exception("Function call did not return expected function_response")
+                            function_call_results.append(function_call_result.parts[0])
+                            if args.verbose:
+                                print(f"-> {function_call_result.parts[0].function_response.response}")
+
+            # Add function call results to the conversation
+            if function_call_results:
+                tool_response = types.Content(
+                    role="user",
+                    parts=function_call_results
+                )
+                messages.append(tool_response)
+
+            # Check if the model is finished (no function calls and has text response)
+            if not has_function_calls and response.text:
+                print("Final response:")
+                print(response.text)
+                break
+
+    except Exception as e:
+        print(f"Error during agent loop: {e}")
+        if args.verbose:
+            raise
 
     if args.verbose:
         print(f"User prompt: {args.prompt}")
